@@ -77,7 +77,30 @@ export function Magnetic({ children, strength = 0.35, className }: { children: R
   )
 }
 
-/** Кастомный курсор: точка + кольцо, кольцо растёт над ссылками и подписывает data-cursor */
+/** Светлый ли фон под точкой: ищем ближайшего предка с непрозрачным фоном и считаем яркость */
+function isLightAt(px: number, py: number) {
+  let el = document.elementFromPoint(px, py) as HTMLElement | null
+  while (el) {
+    const bg = getComputedStyle(el).backgroundColor
+    const n = (bg.match(/-?[\d.]+%?/g) ?? []).map((v) => (v.endsWith('%') ? parseFloat(v) / 100 : +v))
+    // альфа: четвёртое число в rgba/oklab/color(), иначе цвет непрозрачный
+    const alpha = bg.includes('/') || bg.startsWith('rgba') ? n[n.length - 1] : 1
+    if (n.length >= 3 && alpha >= 0.3) {
+      if (bg.startsWith('oklab') || bg.startsWith('oklch')) return n[0] > 0.7
+      const [r, g, b] = bg.startsWith('color(') ? n.slice(0, 3).map((v) => v * 255) : n
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b > 150
+    }
+    el = el.parentElement
+  }
+  return false
+}
+
+const INK = { light: '#0f0a0c', dark: '#ffffff' }
+
+/**
+ * Кастомный курсор: точка + кольцо, кольцо растёт над ссылками и подписывает data-cursor.
+ * На светлом фоне курсор чёрный, на тёмном — белый.
+ */
 export function Cursor() {
   const x = useMotionValue(-100)
   const y = useMotionValue(-100)
@@ -85,40 +108,59 @@ export function Cursor() {
   const ry = useSpring(y, { stiffness: 380, damping: 32, mass: 0.5 })
   const [label, setLabel] = useState<string | null>(null)
   const [hover, setHover] = useState(false)
+  const [light, setLight] = useState(false)
   const [enabled, setEnabled] = useState(false)
 
   useEffect(() => {
     if (!window.matchMedia('(pointer: fine)').matches) return
     setEnabled(true)
     document.body.classList.add('has-cursor')
+    let px = -100
+    let py = -100
     const move = (e: PointerEvent) => {
-      x.set(e.clientX)
-      y.set(e.clientY)
+      px = e.clientX
+      py = e.clientY
+      x.set(px)
+      y.set(py)
       const t = e.target as HTMLElement
       const withLabel = t.closest<HTMLElement>('[data-cursor]')
       setLabel(withLabel?.dataset.cursor ?? null)
       setHover(!!t.closest('a, button, [role="button"], input, textarea, select, label'))
+      setLight(isLightAt(px, py))
     }
+    // при прокрутке колесом фон под курсором меняется без движения мыши
+    const scroll = () => px >= 0 && setLight(isLightAt(px, py))
     window.addEventListener('pointermove', move)
+    window.addEventListener('scroll', scroll, { passive: true })
     return () => {
       window.removeEventListener('pointermove', move)
+      window.removeEventListener('scroll', scroll)
       document.body.classList.remove('has-cursor')
     }
   }, [x, y])
 
   if (!enabled) return null
   const size = label ? 96 : hover ? 54 : 34
+  const ink = light ? INK.light : INK.dark
+  const paper = light ? INK.dark : INK.light
 
   return (
     <>
-      <motion.div className="pointer-events-none fixed left-0 top-0 z-[300] h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blush" style={{ x, y }} />
       <motion.div
-        className="pointer-events-none fixed left-0 top-0 z-[299] grid -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-blush/60 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-noir"
+        className="pointer-events-none fixed left-0 top-0 z-[300] h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ x, y }}
+        animate={{ backgroundColor: ink }}
+        transition={{ duration: 0.25 }}
+      />
+      <motion.div
+        className="pointer-events-none fixed left-0 top-0 z-[299] grid -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border text-[0.6rem] font-semibold uppercase tracking-[0.2em]"
         style={{ x: rx, y: ry }}
         animate={{
           width: size,
           height: size,
-          backgroundColor: label ? 'rgba(244,201,204,0.95)' : hover ? 'rgba(244,201,204,0.12)' : 'rgba(244,201,204,0)',
+          borderColor: ink,
+          color: paper,
+          backgroundColor: label ? ink : hover ? `${ink}1f` : `${ink}00`,
         }}
         transition={{ duration: 0.35, ease: EASE }}
       >
